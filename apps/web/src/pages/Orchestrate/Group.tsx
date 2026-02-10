@@ -4,7 +4,7 @@ import type { GroupsQuery } from '~/schemas/gql/graphql'
 import { useStore } from '@nanostores/react'
 import { Settings2, Table2 } from 'lucide-react'
 
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   useGroupDelNodesMutation,
@@ -13,11 +13,14 @@ import {
   useRemoveGroupMutation,
   useRenameGroupMutation,
   useSubscriptionsQuery,
+  useGroupAddNodesMutation,
+  useNodesQuery,
 } from '~/apis'
 import { DroppableGroupCard } from '~/components/DroppableGroupCard'
 import { GroupFormModal } from '~/components/GroupFormModal'
 import { Section } from '~/components/Section'
 import { SortableGroupContent } from '~/components/SortableGroupContent'
+import { NodeSelectorModal } from '~/components/NodeSelectorModal'
 import { Button } from '~/components/ui/button'
 import { SimpleTooltip } from '~/components/ui/tooltip'
 import { DraggableResourceType } from '~/constants'
@@ -33,15 +36,18 @@ export function GroupResource({
 }) {
   const { t } = useTranslation()
   const { data: groupsQuery } = useGroupsQuery()
+  const { data: nodesQuery } = useNodesQuery()
   const { defaultGroupID } = useStore(defaultResourcesAtom)
   const [openedCreateGroupFormModal, { open: openCreateGroupFormModal, close: closeCreateGroupFormModal }] =
     useDisclosure(false)
   const [openedUpdateGroupFormModal, { open: openUpdateGroupFormModal, close: closeUpdateGroupFormModal }] =
     useDisclosure(false)
+  const [nodeSelectorGroupId, setNodeSelectorGroupId] = useState<string | null>(null)
   const removeGroupMutation = useRemoveGroupMutation()
   const renameGroupMutation = useRenameGroupMutation()
   const groupDelNodesMutation = useGroupDelNodesMutation()
   const groupDelSubscriptionsMutation = useGroupDelSubscriptionsMutation()
+  const groupAddNodesMutation = useGroupAddNodesMutation()
   const updateGroupFormModalRef = useRef<GroupFormModalRef>(null)
   const { data: subscriptionsQuery } = useSubscriptionsQuery()
 
@@ -62,6 +68,40 @@ export function GroupResource({
     }
     return undefined
   }, [draggingResource])
+
+  const handleOpenNodeSelector = (groupId: string) => {
+    setNodeSelectorGroupId(groupId)
+  }
+
+  const handleCloseNodeSelector = () => {
+    setNodeSelectorGroupId(null)
+  }
+
+  const handleConfirmNodeSelection = (groupId: string, currentNodeIds: string[], newSelectedIds: string[]) => {
+    const currentIdSet = new Set(currentNodeIds)
+    const newIdSet = new Set(newSelectedIds)
+
+    // Find nodes to add (in new but not in current)
+    const nodesToAdd = newSelectedIds.filter((id) => !currentIdSet.has(id))
+
+    // Find nodes to remove (in current but not in new)
+    const nodesToRemove = currentNodeIds.filter((id) => !newIdSet.has(id))
+
+    // Execute mutations
+    if (nodesToAdd.length > 0) {
+      groupAddNodesMutation.mutate({
+        id: groupId,
+        nodeIDs: nodesToAdd,
+      })
+    }
+
+    if (nodesToRemove.length > 0) {
+      groupDelNodesMutation.mutate({
+        id: groupId,
+        nodeIDs: nodesToRemove,
+      })
+    }
+  }
 
   return (
     <Section
@@ -128,6 +168,7 @@ export function GroupResource({
                   subscriptionIDs: [subscriptionId],
                 })
               }
+              onAddNodesClick={() => handleOpenNodeSelector(groupId)}
             />
           </DroppableGroupCard>
         ),
@@ -139,6 +180,24 @@ export function GroupResource({
         opened={openedUpdateGroupFormModal}
         onClose={closeUpdateGroupFormModal}
       />
+
+      {/* Node Selector Modal */}
+      {nodeSelectorGroupId && (
+        <NodeSelectorModal
+          open={true}
+          onClose={handleCloseNodeSelector}
+          allNodes={nodesQuery?.nodes || []}
+          selectedNodeIds={
+            groupsQuery?.groups.find((g) => g.id === nodeSelectorGroupId)?.nodes.map((n) => n.id) || []
+          }
+          allSubscriptions={subscriptionsQuery?.subscriptions}
+          onConfirm={(selectedIds) => {
+            const currentNodeIds =
+              groupsQuery?.groups.find((g) => g.id === nodeSelectorGroupId)?.nodes.map((n) => n.id) || []
+            handleConfirmNodeSelection(nodeSelectorGroupId, currentNodeIds, selectedIds)
+          }}
+        />
+      )}
     </Section>
   )
 }
