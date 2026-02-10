@@ -21,6 +21,8 @@ export default defineConfig([
     outDir: 'dist',
     // Bundle all dependencies for standalone server
     noExternal: [/.*/],
+    // NOTE: 有意打包所有依赖，禁止 tsdown 报 inlineOnly 错误
+    inlineOnly: false,
     platform: 'node',
     target: 'node18',
     clean: false,
@@ -45,6 +47,8 @@ export default defineConfig([
     outDir: 'dist',
     // Bundle all dependencies for standalone browser worker
     noExternal: [/.*/],
+    // NOTE: 有意打包所有依赖，禁止 tsdown 报 inlineOnly 错误
+    inlineOnly: false,
     platform: 'browser',
     target: 'es2022',
     clean: false,
