@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '~/components/ui/dialog'
@@ -43,8 +43,8 @@ export function NodeSelectorModal({
   const [searchText, setSearchText] = useState('')
   const [tempSelectedIds, setTempSelectedIds] = useState<string[]>(selectedNodeIds)
 
-  // Update temp selection when modal opens with new selectedNodeIds
-  useMemo(() => {
+  // 弹窗打开时同步已选节点状态
+  useEffect(() => {
     if (open) {
       setTempSelectedIds(selectedNodeIds)
     }

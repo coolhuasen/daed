@@ -10,32 +10,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-      
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
           version: 8
-      
+
+      # NOTE: 必须在根目录安装依赖，因为项目使用 pnpm workspace
       - name: Install dependencies
-        working-directory: apps/web
         run: pnpm install
-      
+
+      # NOTE: 使用 --filter 只构建 web 包
       - name: Build Web UI
-        working-directory: apps/web
-        run: pnpm build
-      
+        run: pnpm --filter daed build
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: daed-web-ui
           path: apps/web/dist/
-          retention-days: 7
+          retention-days: 30

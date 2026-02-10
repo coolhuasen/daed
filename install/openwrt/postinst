@@ -1,0 +1,13 @@
+#!/bin/sh
+# NOTE: IPK 安装后脚本 —— 设置权限并启用服务
+chmod +x /usr/bin/daed
+chmod +x /etc/init.d/daed
+
+# 启用开机自启
+/etc/init.d/daed enable 2>/dev/null
+
+echo "daed installed successfully."
+echo "Start with: /etc/init.d/daed start"
+echo "Web UI: http://<router-ip>:2023"
+
+exit 0

@@ -51,6 +51,30 @@ export function GroupResource({
   const updateGroupFormModalRef = useRef<GroupFormModalRef>(null)
   const { data: subscriptionsQuery } = useSubscriptionsQuery()
 
+  // NOTE: 构建 nodeId → subscriptionId 映射，用于在弹窗中显示节点的订阅来源
+  const nodeSubscriptionMap = useMemo(() => {
+    const map = new Map<string, string>()
+    if (subscriptionsQuery?.subscriptions) {
+      for (const sub of subscriptionsQuery.subscriptions) {
+        if (sub.nodes?.edges) {
+          for (const node of sub.nodes.edges) {
+            map.set(node.id, sub.id)
+          }
+        }
+      }
+    }
+    return map
+  }, [subscriptionsQuery])
+
+  // NOTE: 合并所有节点并注入 subscriptionID，用于 NodeSelectorModal
+  const allNodesWithSubscription = useMemo(() => {
+    const edges = nodesQuery?.nodes.edges || []
+    return edges.map((node) => ({
+      ...node,
+      subscriptionID: nodeSubscriptionMap.get(node.id) || null,
+    }))
+  }, [nodesQuery?.nodes.edges, nodeSubscriptionMap])
+
   // Determine which accordion sections should be auto-expanded based on drag type
   const autoExpandValue = useMemo(() => {
     if (!draggingResource) return undefined
@@ -186,7 +210,7 @@ export function GroupResource({
         <NodeSelectorModal
           open={true}
           onClose={handleCloseNodeSelector}
-          allNodes={nodesQuery?.nodes || []}
+          allNodes={allNodesWithSubscription}
           selectedNodeIds={
             groupsQuery?.groups.find((g) => g.id === nodeSelectorGroupId)?.nodes.map((n) => n.id) || []
           }
