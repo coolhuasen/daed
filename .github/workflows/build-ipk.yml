@@ -82,8 +82,8 @@ jobs:
             enabled: ${{ github.event.inputs.target_arch == 'aarch64' || github.event.inputs.target_arch == 'all' }}
       fail-fast: false
 
-    # NOTE: 跳过未选中的架构
-    if: always()
+    # NOTE: 仅在 build-web 成功后运行，且不因其他矩阵任务失败而取消
+    if: ${{ !cancelled() && needs.build-web.result == 'success' }}
 
     env:
       GOOS: ${{ matrix.goos }}
