@@ -28,16 +28,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # NOTE: 不指定版本，自动从 package.json 的 packageManager 字段读取 (pnpm@10.24.0)
+      # NOTE: 显式指定 pnpm 10.24.0，与 package.json packageManager 字段一致
       - uses: pnpm/action-setup@v4.2.0
+        with:
+          version: 10.24.0
 
       - uses: actions/setup-node@v6
         with:
           cache: pnpm
           node-version: latest
 
+      # NOTE: 调试 pnpm 版本确认
+      - name: Check pnpm version
+        run: |
+          echo "pnpm version: $(pnpm --version)"
+          echo "node version: $(node --version)"
+
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build Web UI
         env:
