@@ -3,7 +3,7 @@ name: Build Web UI
 on:
   workflow_dispatch:
   push:
-    branches: [ feature/node-selector-ui ]
+    branches: [feature/node-selector-ui]
     paths:
       - 'apps/web/**'
 
@@ -13,21 +13,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      # NOTE: 显式指定 pnpm 10.24.0，与 package.json packageManager 字段一致
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4.2.0
+        with:
+          version: 10.24.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '18'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
+          cache: pnpm
+          node-version: latest
 
       # NOTE: 必须在根目录安装依赖，因为项目使用 pnpm workspace
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       # NOTE: 使用 --filter 只构建 web 包
       - name: Build Web UI
