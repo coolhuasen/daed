@@ -1,0 +1,231 @@
+name: Build OpenWRT IPK Package
+
+# NOTE: 手动触发，支持选择目标架构和版本号
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例: 1.0.0)'
+        required: true
+        default: '0.1.0'
+      target_arch:
+        description: '目标架构'
+        required: true
+        type: choice
+        default: 'x86_64'
+        options:
+          - x86_64
+          - aarch64
+          - all
+
+concurrency:
+  group: build-ipk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # NOTE: 显式指定 pnpm 10.24.0，与 package.json packageManager 字段一致
+      - uses: pnpm/action-setup@v4.2.0
+        with:
+          version: 10.24.0
+
+      - uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          node-version: latest
+
+      # NOTE: 调试 pnpm 版本确认
+      - name: Check pnpm version
+        run: |
+          echo "pnpm version: $(pnpm --version)"
+          echo "node version: $(node --version)"
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build Web UI
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm --filter daed build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist/
+          retention-days: 1
+
+  build-ipk:
+    needs: build-web
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          # NOTE: 根据用户选择的架构生成对应的构建矩阵
+          - goos: linux
+            goarch: amd64
+            goamd64: v1
+            openwrt_arch: x86_64
+            enabled: ${{ github.event.inputs.target_arch == 'x86_64' || github.event.inputs.target_arch == 'all' }}
+
+          - goos: linux
+            goarch: arm64
+            openwrt_arch: aarch64
+            enabled: ${{ github.event.inputs.target_arch == 'aarch64' || github.event.inputs.target_arch == 'all' }}
+      fail-fast: false
+
+    # NOTE: 跳过未选中的架构
+    if: always()
+
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      GOAMD64: ${{ matrix.goamd64 }}
+      CGO_ENABLED: 0
+      VERSION: ${{ github.event.inputs.version }}
+
+    steps:
+      - name: Check if this arch is enabled
+        id: check
+        run: |
+          if [ "${{ matrix.enabled }}" != "true" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping ${{ matrix.openwrt_arch }} build"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.check.outputs.skip != 'true'
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v6
+        if: steps.check.outputs.skip != 'true'
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - uses: actions/download-artifact@v4
+        if: steps.check.outputs.skip != 'true'
+        with:
+          name: web-dist
+          path: dist/
+
+      # NOTE: 编译 daed 二进制（内嵌 Web UI + dae-wing 后端）
+      - name: Build daed binary
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          export GOFLAGS="-trimpath -modcacherw"
+          export OUTPUT=daed
+          make SKIP_SUBMODULES=1
+
+      # NOTE: 下载 GeoIP/GeoSite 数据文件
+      - name: Download geo data
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          curl -L -o geoip.dat https://github.com/v2rayA/dist-v2ray-rules-dat/raw/master/geoip.dat
+          curl -L -o geosite.dat https://github.com/v2rayA/dist-v2ray-rules-dat/raw/master/geosite.dat
+
+      # NOTE: 构建 IPK 目录结构
+      - name: Prepare IPK structure
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          PKG_DIR="daed-ipk"
+          INSTALLED_SIZE=$(stat -c %s daed)
+
+          # 创建 CONTROL 目录
+          mkdir -p "$PKG_DIR/CONTROL"
+
+          cat > "$PKG_DIR/CONTROL/control" << EOF
+          Package: daed
+          Version: ${{ github.event.inputs.version }}
+          Architecture: ${{ matrix.openwrt_arch }}
+          Maintainer: coolhuasen
+          Section: net
+          Priority: optional
+          Depends: kmod-bpf, kmod-nft-tproxy, ca-bundle
+          Installed-Size: $INSTALLED_SIZE
+          Description: daed - A Modern Dashboard For dae (eBPF transparent proxy)
+           daed is a high-performance transparent proxy solution based on eBPF.
+           It bundles dae-wing backend with a modern web dashboard.
+          Homepage: https://github.com/coolhuasen/daed
+          EOF
+
+          # HACK: 去除 heredoc 产生的前导空格
+          sed -i 's/^          //' "$PKG_DIR/CONTROL/control"
+
+          # 复制安装脚本
+          cp install/openwrt/postinst "$PKG_DIR/CONTROL/postinst"
+          cp install/openwrt/prerm "$PKG_DIR/CONTROL/prerm"
+          chmod 755 "$PKG_DIR/CONTROL/postinst"
+          chmod 755 "$PKG_DIR/CONTROL/prerm"
+
+          # 创建数据目录结构
+          mkdir -p "$PKG_DIR/usr/bin"
+          mkdir -p "$PKG_DIR/etc/init.d"
+          mkdir -p "$PKG_DIR/etc/config"
+          mkdir -p "$PKG_DIR/usr/share/daed"
+
+          # 复制文件
+          cp daed "$PKG_DIR/usr/bin/daed"
+          chmod 755 "$PKG_DIR/usr/bin/daed"
+
+          cp install/openwrt/init.d/daed "$PKG_DIR/etc/init.d/daed"
+          chmod 755 "$PKG_DIR/etc/init.d/daed"
+
+          cp install/openwrt/config/daed "$PKG_DIR/etc/config/daed"
+
+          cp geoip.dat "$PKG_DIR/usr/share/daed/geoip.dat"
+          cp geosite.dat "$PKG_DIR/usr/share/daed/geosite.dat"
+
+          # 配置文件声明（防止升级时覆盖用户配置）
+          cat > "$PKG_DIR/CONTROL/conffiles" << EOF
+          /etc/config/daed
+          EOF
+          sed -i 's/^          //' "$PKG_DIR/CONTROL/conffiles"
+
+          echo "=== IPK package structure ==="
+          find "$PKG_DIR" -type f | sort
+          echo "=== CONTROL/control ==="
+          cat "$PKG_DIR/CONTROL/control"
+
+      # NOTE: 使用 opkg-build 生成 .ipk 文件
+      - name: Build IPK package
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          # 安装 opkg-utils
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq opkg-utils 2>/dev/null || {
+            # HACK: 如果系统源没有 opkg-utils，从 GitHub 获取
+            git clone https://git.openwrt.org/project/opkg-utils.git /tmp/opkg-utils
+            export PATH="/tmp/opkg-utils:$PATH"
+          }
+
+          # 构建 IPK
+          opkg-build -o root -g root daed-ipk .
+
+          # 重命名产物
+          IPK_FILE=$(ls daed_*.ipk 2>/dev/null || ls daed*.ipk)
+          FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
+          mv "$IPK_FILE" "$FINAL_NAME"
+
+          echo "=== Generated IPK ==="
+          ls -lh "$FINAL_NAME"
+          echo "IPK_FILE=$FINAL_NAME" >> $GITHUB_ENV
+
+          # 验证 IPK 结构
+          echo "=== IPK contents ==="
+          ar -t "$FINAL_NAME"
+
+      - name: Upload IPK artifact
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daed-ipk-${{ matrix.openwrt_arch }}
+          path: ${{ env.IPK_FILE }}
+          retention-days: 30

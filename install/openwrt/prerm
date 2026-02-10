@@ -1,0 +1,6 @@
+#!/bin/sh
+# NOTE: IPK 卸载前脚本 —— 停止服务并禁用自启
+/etc/init.d/daed stop 2>/dev/null
+/etc/init.d/daed disable 2>/dev/null
+
+exit 0
