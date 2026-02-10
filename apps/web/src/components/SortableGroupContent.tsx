@@ -2,8 +2,10 @@ import { Droppable } from '@hello-pangea/dnd'
 import { useStore } from '@nanostores/react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Plus } from 'lucide-react'
 import { SortableResourceBadge } from '~/components/SortableResourceBadge'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '~/components/ui/accordion'
+import { Button } from '~/components/ui/button'
 import { groupSortOrdersAtom } from '~/store'
 
 interface GroupNode {
@@ -34,6 +36,7 @@ export function SortableGroupContent({
   autoExpandValue,
   onDelNode,
   onDelSubscription,
+  onAddNodesClick,
 }: {
   groupId: string
   nodes: GroupNode[]
@@ -42,6 +45,7 @@ export function SortableGroupContent({
   autoExpandValue?: string
   onDelNode: (nodeId: string) => void
   onDelSubscription: (subscriptionId: string) => void
+  onAddNodesClick?: () => void
 }) {
   const { t } = useTranslation()
 
@@ -112,9 +116,25 @@ export function SortableGroupContent({
   return (
     <Accordion type="multiple" className="w-full" value={effectiveExpandedSections} onValueChange={setExpandedSections}>
       <AccordionItem value="node" className="border-none">
-        <AccordionTrigger className="text-xs py-2 hover:no-underline">
-          {t('node')} ({nodes.length})
-        </AccordionTrigger>
+        <div className="flex items-center justify-between">
+          <AccordionTrigger className="text-xs py-2 hover:no-underline flex-1">
+            {t('node')} ({nodes.length})
+          </AccordionTrigger>
+          {onAddNodesClick && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={(e) => {
+                e.stopPropagation()
+                onAddNodesClick()
+              }}
+              className="ml-2 h-7 px-2 text-xs"
+            >
+              <Plus className="h-3 w-3 mr-1" />
+              {t('actions.add', '添加')}
+            </Button>
+          )}
+        </div>
 
         <AccordionContent>
           <Droppable droppableId={`${groupId}-nodes`} type="NODE">
