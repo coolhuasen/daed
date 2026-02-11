@@ -198,37 +198,44 @@ jobs:
           echo "=== CONTROL/control ==="
           cat "$PKG_DIR/CONTROL/control"
 
-      # NOTE: 手动构建 IPK 文件（不依赖 opkg-utils，使用标准 tar/gzip/ar 工具）
-      # IPK 格式 = ar 压缩包，包含 debian-binary + control.tar.gz + data.tar.gz
+      # NOTE: 手动构建 IPK 文件（严格按照 opkg-build 源码格式）
+      # IPK = ar 归档: debian-binary + control.tar.gz + data.tar.gz
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
+          set -e
           FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
           PKG_DIR="daed-ipk"
+          TMP_DIR=$(mktemp -d)
 
-          # 1. 创建 debian-binary
-          echo "2.0" > debian-binary
+          # 1. debian-binary（必须是 "2.0" + 换行）
+          echo "2.0" > "$TMP_DIR/debian-binary"
 
-          # 2. 创建 control.tar.gz（从 CONTROL 目录）
-          cd "$PKG_DIR/CONTROL"
-          tar czf ../../control.tar.gz --owner=root --group=root ./*
-          cd ../..
+          # 2. control.tar.gz：文件必须在归档根级别（./control, ./postinst, ...）
+          tar -C "$PKG_DIR/CONTROL" -czf "$TMP_DIR/control.tar.gz" .
 
-          # 3. 创建 data.tar.gz（从数据目录，排除 CONTROL）
-          cd "$PKG_DIR"
-          tar czf ../data.tar.gz --owner=root --group=root --exclude='./CONTROL' .
-          cd ..
+          # 3. data.tar.gz：排除 CONTROL 目录，保留完整路径树
+          tar -C "$PKG_DIR" --exclude='./CONTROL' -czf "$TMP_DIR/data.tar.gz" .
 
-          # 4. 用 ar 打包为 .ipk
-          ar r "$FINAL_NAME" debian-binary control.tar.gz data.tar.gz
+          # 4. ar 打包为 .ipk（必须用 ./前缀，顺序: debian-binary 在前）
+          cd "$TMP_DIR"
+          ar crf "$OLDPWD/$FINAL_NAME" ./debian-binary ./control.tar.gz ./data.tar.gz
+          cd "$OLDPWD"
+
+          # 清理临时目录
+          rm -rf "$TMP_DIR"
 
           echo "=== Generated IPK ==="
           ls -lh "$FINAL_NAME"
           echo "IPK_FILE=$FINAL_NAME" >> $GITHUB_ENV
 
-          # 验证 IPK 结构
-          echo "=== IPK contents ==="
+          # 调试：验证 IPK 内部结构
+          echo "=== IPK ar members ==="
           ar -t "$FINAL_NAME"
+          echo "=== control.tar.gz contents ==="
+          ar -p "$FINAL_NAME" control.tar.gz | tar tzf -
+          echo "=== data.tar.gz contents ==="
+          ar -p "$FINAL_NAME" data.tar.gz | tar tzf -
 
       - name: Upload IPK artifact
         if: steps.check.outputs.skip != 'true'
