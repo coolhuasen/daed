@@ -139,13 +139,10 @@ jobs:
       - name: Prepare IPK structure
         if: steps.check.outputs.skip != 'true'
         run: |
-          PKG_DIR="daed-ipk"
-          INSTALLED_SIZE=$(stat -c %s daed)
+          # 创建 CONTROL 目录
+          mkdir -p "$PKG_DIR/CONTROL"
 
-          # 创建 DEBIAN 目录 (dpkg-deb 标准)
-          mkdir -p "$PKG_DIR/DEBIAN"
-
-          cat > "$PKG_DIR/DEBIAN/control" << EOF
+          cat > "$PKG_DIR/CONTROL/control" << EOF
           Package: daed
           Version: ${{ github.event.inputs.version }}
           Architecture: ${{ matrix.openwrt_arch }}
@@ -161,13 +158,13 @@ jobs:
           EOF
 
           # HACK: 去除 heredoc 产生的前导空格
-          sed -i 's/^          //' "$PKG_DIR/DEBIAN/control"
+          sed -i 's/^          //' "$PKG_DIR/CONTROL/control"
 
           # 复制安装脚本
-          cp install/openwrt/postinst "$PKG_DIR/DEBIAN/postinst"
-          cp install/openwrt/prerm "$PKG_DIR/DEBIAN/prerm"
-          chmod 755 "$PKG_DIR/DEBIAN/postinst"
-          chmod 755 "$PKG_DIR/DEBIAN/prerm"
+          cp install/openwrt/postinst "$PKG_DIR/CONTROL/postinst"
+          cp install/openwrt/prerm "$PKG_DIR/CONTROL/prerm"
+          chmod 755 "$PKG_DIR/CONTROL/postinst"
+          chmod 755 "$PKG_DIR/CONTROL/prerm"
 
           # 创建数据目录结构
           mkdir -p "$PKG_DIR/usr/bin"
@@ -189,32 +186,42 @@ jobs:
 
           # 配置文件声明（防止升级时覆盖用户配置）
           # 配置文件声明（防止升级时覆盖用户配置）
-          cat > "$PKG_DIR/DEBIAN/conffiles" << EOF
+          cat > "$PKG_DIR/CONTROL/conffiles" << EOF
           /etc/config/daed
           EOF
-          sed -i 's/^          //' "$PKG_DIR/DEBIAN/conffiles"
+          sed -i 's/^          //' "$PKG_DIR/CONTROL/conffiles"
 
-          echo "=== IPK package structure ==="
-          find "$PKG_DIR" -type f | sort
-          echo "=== DEBIAN/control ==="
-          cat "$PKG_DIR/DEBIAN/control"
+          # 关键修复：强制转换为 LF 换行符 (解决 Malformed package 的隐蔽原因)
+          # opkg 对控制文件中的 \r 非常敏感
+          find "$PKG_DIR/CONTROL" -type f -exec sed -i 's/\r$//' {} +
+          find "$PKG_DIR/etc" -type f -exec sed -i 's/\r$//' {} +
 
-      # NOTE: 使用标准 dpkg-deb 工具构建 (IPK 本质就是 DEB)
-      # 这是最稳妥的标准构建方式，自动处理 ar/tar 格式和权限
+          echo "=== CONTROL/control ==="
+          cat "$PKG_DIR/CONTROL/control"
+
+      # NOTE: 使用官方 opkg-build 脚本构建
+      # 这是最正统的方式，自动处理 ar/tar 所有底层历史遗留兼容性问题
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
           set -e
           PKG_DIR="daed-ipk"
 
+          # 1. 下载官方 opkg-build 脚本
+          curl -sSL https://raw.githubusercontent.com/openwrt/opkg-utils/master/opkg-build -o opkg-build
+          chmod +x opkg-build
+
           # 定义最终文件名
           IPK_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
 
-          # 使用 dpkg-deb 构建
-          # --root-owner-group: 强制内容为 root:root
-          # -Zgzip: 强制使用 gzip 压缩 (OpenWRT 兼容性必需，默认可能是 zstd/xz)
-          # -b: build
-          dpkg-deb --root-owner-group -Zgzip -b "$PKG_DIR" "$IPK_NAME"
+          # 2. 执行打包
+          # -o 0 -g 0: 强制 root 所有权
+          ./opkg-build -o 0 -g 0 "$PKG_DIR" .
+
+          # 重命名为目标名称
+          # opkg-build 默认生成格式类似 daed_0.1.9.1_x86_64.ipk
+          # 我们将其统一重命名，方便 artifact 上传
+          mv daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk "$IPK_NAME" || true
 
           echo "=== Generated IPK ==="
           ls -lh "$IPK_NAME"
@@ -224,11 +231,9 @@ jobs:
           echo "=== IPK ar members ==="
           ar t "$IPK_NAME"
 
-          # 尝试 opkg info 验证
-          if command -v opkg >/dev/null; then
-             echo "=== opkg info verification ==="
-             opkg info -f "$IPK_NAME" || echo "opkg info failed check"
-          fi
+          # 尝试调试：查看内部 control 文件末尾是否有 \r (应输出 0)
+          echo "Checking for CR in control inside IPK:"
+          ar p "$IPK_NAME" control.tar.gz | tar xzO ./control | grep -c $'\r' || true
 
       - name: Upload IPK artifact
         if: steps.check.outputs.skip != 'true'
