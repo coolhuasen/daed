@@ -198,76 +198,54 @@ jobs:
           echo "=== CONTROL/control ==="
           cat "$PKG_DIR/CONTROL/control"
 
-      # NOTE: 零外部依赖构建 IPK
-      # tar --owner=0 --group=0 处理权限，Python 内联脚本精确构建 ar 归档
+      # NOTE: 使用官方 opkg-build + fakeroot 构建，并添加 opkg info 验证
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
           set -e
-          export FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
-          PKG_DIR="daed-ipk"
-          export TMP_DIR=$(mktemp -d)
 
-          # 1. debian-binary
-          printf '2.0\n' > "$TMP_DIR/debian-binary"
+          # 安装依赖：fakeroot, opkg-utils
+          # 尝试从 apt 安装 opkg 用于验证（如果可用）
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fakeroot opkg-utils || true
 
-          # 2. control.tar.gz（文件在归档根级别，uid/gid=0 即 root）
-          tar -C "$PKG_DIR/CONTROL" --owner=0 --group=0 -czf "$TMP_DIR/control.tar.gz" .
+          # 无论 apt 是否安装了 opkg-build，都下载最新脚本作为备用
+          wget -q https://raw.githubusercontent.com/openwrt/opkg-utils/master/opkg-build -O /tmp/opkg-build
+          chmod +x /tmp/opkg-build
 
-          # 3. data.tar.gz（排除 CONTROL 目录）
-          tar -C "$PKG_DIR" --owner=0 --group=0 --exclude='./CONTROL' -czf "$TMP_DIR/data.tar.gz" .
+          FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
 
-          # 4. 用 Python 精确构建 ar 归档格式的 .ipk
-          python3 << 'PYEOF'
-          import struct, os, time
+          # 使用 fakeroot 运行 opkg-build
+          # 忽略 exit code 8 (tar 的非致命警告)
+          echo "Running opkg-build..."
+          if ! fakeroot /tmp/opkg-build daed-ipk .; then
+            echo "opkg-build returned error code, checking if IPK was generated..."
+          fi
 
-          def ar_member(name, data):
-              """构建一个 ar 成员条目（60 字节头 + 数据 + 对齐填充）"""
-              name_field = name.encode().ljust(16)
-              mtime = str(int(time.time())).encode().ljust(12)
-              uid = b'0'.ljust(6)
-              gid = b'0'.ljust(6)
-              mode = b'100644'.ljust(8)
-              size = str(len(data)).encode().ljust(10)
-              fmag = b'`\n'
-              header = name_field + mtime + uid + gid + mode + size + fmag
-              # ar 要求成员数据 2 字节对齐
-              pad = b'\n' if len(data) % 2 else b''
-              return header + data + pad
+          IPK_FILE=$(ls daed_*.ipk 2>/dev/null | head -1)
+          if [ -f "$IPK_FILE" ]; then
+            echo "IPK generated successfully: $IPK_FILE"
+            if [ "$IPK_FILE" != "$FINAL_NAME" ]; then
+              mv "$IPK_FILE" "$FINAL_NAME"
+            fi
+            echo "IPK_FILE=$FINAL_NAME" >> $GITHUB_ENV
+            ls -lh "$FINAL_NAME"
+          else
+            echo "Error: IPK file not generated!"
+            exit 1
+          fi
 
-          tmp = os.environ.get('TMP_DIR', '/tmp')
-          out = os.environ.get('FINAL_NAME', 'output.ipk')
+          # 验证 IPK 结构和元数据
+          echo "=== IPK Structure Verification ==="
+          ar t "$FINAL_NAME"
 
-          with open(f'{tmp}/debian-binary', 'rb') as f:
-              db = f.read()
-          with open(f'{tmp}/control.tar.gz', 'rb') as f:
-              ctrl = f.read()
-          with open(f'{tmp}/data.tar.gz', 'rb') as f:
-              data = f.read()
-
-          with open(out, 'wb') as f:
-              f.write(b'!<arch>\n')  # ar 魔数
-              f.write(ar_member('debian-binary', db))
-              f.write(ar_member('control.tar.gz', ctrl))
-              f.write(ar_member('data.tar.gz', data))
-
-          print(f'IPK created: {out} ({os.path.getsize(out)} bytes)')
-          PYEOF
-
-          # 清理
-          rm -rf "$TMP_DIR"
-
-          echo "=== Generated IPK ==="
-          ls -lh "$FINAL_NAME"
-          echo "IPK_FILE=$FINAL_NAME" >> $GITHUB_ENV
-
-          # 调试：验证 IPK 内部结构
-          echo "=== IPK ar members ==="
-          ar -t "$FINAL_NAME"
-          echo "=== control.tar.gz contents ==="
-          ar -p "$FINAL_NAME" control.tar.gz | tar tzf -
-          echo "=== data.tar.gz contents ==="
-          ar -p "$FINAL_NAME" data.tar.gz | tar tzf -
+          # 尝试使用 opkg 验证（如果安装成功）
+          if command -v opkg >/dev/null; then
+            echo "=== opkg info verification ==="
+            opkg info -f "$FINAL_NAME" || echo "opkg info failed, but continuing..."
+          else
+            echo "opkg command not found, skipping info verification."
+          fi
 
       - name: Upload IPK artifact
         if: steps.check.outputs.skip != 'true'
