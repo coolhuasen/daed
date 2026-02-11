@@ -223,7 +223,7 @@ jobs:
 
           def ar_member(name, data):
               """构建一个 ar 成员条目（60 字节头 + 数据 + 对齐填充）"""
-              name_field = (name + '/').encode().ljust(16)
+              name_field = name.encode().ljust(16)
               mtime = str(int(time.time())).encode().ljust(12)
               uid = b'0'.ljust(6)
               gid = b'0'.ljust(6)
