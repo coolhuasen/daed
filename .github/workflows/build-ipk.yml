@@ -198,27 +198,29 @@ jobs:
           echo "=== CONTROL/control ==="
           cat "$PKG_DIR/CONTROL/control"
 
-      # NOTE: 使用 opkg-build 生成 .ipk 文件
+      # NOTE: 手动构建 IPK 文件（不依赖 opkg-utils，使用标准 tar/gzip/ar 工具）
+      # IPK 格式 = ar 压缩包，包含 debian-binary + control.tar.gz + data.tar.gz
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
-          # 安装 opkg-utils
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq opkg-utils 2>/dev/null || {
-            # HACK: 如果系统源没有 opkg-utils，从 GitHub 获取 ZIP (避免 git clone 鉴权问题)
-            wget -q https://github.com/openwrt/opkg-utils/archive/refs/heads/master.zip -O opkg-utils.zip
-            unzip -q opkg-utils.zip
-            mv opkg-utils-master /tmp/opkg-utils
-            export PATH="/tmp/opkg-utils:$PATH"
-          }
-
-          # 构建 IPK
-          opkg-build -o root -g root daed-ipk .
-
-          # 重命名产物
-          IPK_FILE=$(ls daed_*.ipk 2>/dev/null || ls daed*.ipk)
           FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
-          mv "$IPK_FILE" "$FINAL_NAME"
+          PKG_DIR="daed-ipk"
+
+          # 1. 创建 debian-binary
+          echo "2.0" > debian-binary
+
+          # 2. 创建 control.tar.gz（从 CONTROL 目录）
+          cd "$PKG_DIR/CONTROL"
+          tar czf ../../control.tar.gz --owner=root --group=root ./*
+          cd ../..
+
+          # 3. 创建 data.tar.gz（从数据目录，排除 CONTROL）
+          cd "$PKG_DIR"
+          tar czf ../data.tar.gz --owner=root --group=root --exclude='./CONTROL' .
+          cd ..
+
+          # 4. 用 ar 打包为 .ipk
+          ar r "$FINAL_NAME" debian-binary control.tar.gz data.tar.gz
 
           echo "=== Generated IPK ==="
           ls -lh "$FINAL_NAME"
