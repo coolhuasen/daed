@@ -205,8 +205,10 @@ jobs:
           # 安装 opkg-utils
           sudo apt-get update -qq
           sudo apt-get install -y -qq opkg-utils 2>/dev/null || {
-            # HACK: 如果系统源没有 opkg-utils，从 GitHub 获取
-            git clone https://github.com/openwrt/opkg-utils.git /tmp/opkg-utils
+            # HACK: 如果系统源没有 opkg-utils，从 GitHub 获取 ZIP (避免 git clone 鉴权问题)
+            wget -q https://github.com/openwrt/opkg-utils/archive/refs/heads/master.zip -O opkg-utils.zip
+            unzip -q opkg-utils.zip
+            mv opkg-utils-master /tmp/opkg-utils
             export PATH="/tmp/opkg-utils:$PATH"
           }
 
