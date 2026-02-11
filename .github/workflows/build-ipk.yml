@@ -213,7 +213,7 @@ jobs:
           }
 
           # 构建 IPK
-          opkg-build -o root -g root daed-ipk .
+          sudo opkg-build -o root -g root daed-ipk .
 
           # 重命名产物
           IPK_FILE=$(ls daed_*.ipk 2>/dev/null || ls daed*.ipk)
