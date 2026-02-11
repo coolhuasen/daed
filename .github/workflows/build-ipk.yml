@@ -198,9 +198,9 @@ jobs:
           echo "=== CONTROL/control ==="
           cat "$PKG_DIR/CONTROL/control"
 
-      # NOTE: 零外部依赖构建 IPK (兼容性优化版)
-      # 1. 强制 tar --format=gnu 避免 pax headers 兼容性问题
-      # 2. Python 脚本精确构建 ar 归档，文件名使用空格填充而非斜杠后缀
+      # NOTE: 零外部依赖构建 IPK (兼容性极致版)
+      # 1. 强制 tar --format=ustar (最通用的 POSIX 标准，兼容 BusyBox)
+      # 2. Python 脚本精确构建 ar 归档，文件名添加 '/' 后缀 (System V ar 标准)
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
@@ -213,14 +213,14 @@ jobs:
           printf '2.0\n' > "$TMP_DIR/debian-binary"
 
           # 2. control.tar.gz
-          # 强制使用 GNU 格式，避免 pax headers (opkg 不喜欢)
-          # --sort=name --mtime="..." 确保可重现构建
-          tar --format=gnu --sort=name --mtime='@1704067200' \
+          # 使用 ustar 格式，它是最通用的 POSIX 标准，对 BusyBox 兼容性最好
+          # --numeric-owner 避免用户 ID 映射问题
+          tar --format=ustar --sort=name --mtime='@1704067200' \
               --owner=0 --group=0 --numeric-owner \
               -C "$PKG_DIR/CONTROL" -czf "$TMP_DIR/control.tar.gz" .
 
           # 3. data.tar.gz
-          tar --format=gnu --sort=name --mtime='@1704067200' \
+          tar --format=ustar --sort=name --mtime='@1704067200' \
               --owner=0 --group=0 --numeric-owner \
               -C "$PKG_DIR" --exclude='./CONTROL' -czf "$TMP_DIR/data.tar.gz" .
 
@@ -229,10 +229,11 @@ jobs:
           import struct, os, time
 
           def ar_member(name, data):
-              # opkg 兼容性关键：文件名必须用空格填充，不能有 '/' 后缀 (GNU ar 默认有 /)
-              name_field = name.encode().ljust(16)
+              # 关键修复：System V ar 格式要求文件名以 '/' 结尾
+              # 之前版本缺少这个斜杠导致 Malformed package
+              name_field = (name + '/').encode().ljust(16)
               
-              # 固定时间戳以保证确定性，虽然 ar 头并不是关键
+              # 固定时间戳
               mtime = b'1704067200  ' 
               uid = b'0     '
               gid = b'0     '
