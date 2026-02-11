@@ -198,30 +198,64 @@ jobs:
           echo "=== CONTROL/control ==="
           cat "$PKG_DIR/CONTROL/control"
 
-      # NOTE: 使用 OpenWRT 官方 opkg-build 脚本构建 IPK
-      # fakeroot 模拟 root 权限，避免 tar chown 失败
+      # NOTE: 零外部依赖构建 IPK
+      # tar --owner=0 --group=0 处理权限，Python 内联脚本精确构建 ar 归档
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
           set -e
+          export FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
+          PKG_DIR="daed-ipk"
+          export TMP_DIR=$(mktemp -d)
 
-          # 安装 fakeroot（模拟 root 权限的标准工具）
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq fakeroot
+          # 1. debian-binary
+          printf '2.0\n' > "$TMP_DIR/debian-binary"
 
-          # 直接下载 opkg-build 脚本（单文件，无需 git clone）
-          wget -q https://raw.githubusercontent.com/openwrt/opkg-utils/master/opkg-build -O /tmp/opkg-build
-          chmod +x /tmp/opkg-build
+          # 2. control.tar.gz（文件在归档根级别，uid/gid=0 即 root）
+          tar -C "$PKG_DIR/CONTROL" --owner=0 --group=0 -czf "$TMP_DIR/control.tar.gz" .
 
-          # 使用 fakeroot 运行 opkg-build
-          FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
-          fakeroot /tmp/opkg-build daed-ipk .
+          # 3. data.tar.gz（排除 CONTROL 目录）
+          tar -C "$PKG_DIR" --owner=0 --group=0 --exclude='./CONTROL' -czf "$TMP_DIR/data.tar.gz" .
 
-          # 重命名产物（opkg-build 默认生成 daed_版本_架构.ipk）
-          IPK_FILE=$(ls daed_*.ipk 2>/dev/null | head -1)
-          if [ "$IPK_FILE" != "$FINAL_NAME" ] && [ -n "$IPK_FILE" ]; then
-            mv "$IPK_FILE" "$FINAL_NAME"
-          fi
+          # 4. 用 Python 精确构建 ar 归档格式的 .ipk
+          python3 << 'PYEOF'
+          import struct, os, time
+
+          def ar_member(name, data):
+              """构建一个 ar 成员条目（60 字节头 + 数据 + 对齐填充）"""
+              name_field = (name + '/').encode().ljust(16)
+              mtime = str(int(time.time())).encode().ljust(12)
+              uid = b'0'.ljust(6)
+              gid = b'0'.ljust(6)
+              mode = b'100644'.ljust(8)
+              size = str(len(data)).encode().ljust(10)
+              fmag = b'`\n'
+              header = name_field + mtime + uid + gid + mode + size + fmag
+              # ar 要求成员数据 2 字节对齐
+              pad = b'\n' if len(data) % 2 else b''
+              return header + data + pad
+
+          tmp = os.environ.get('TMP_DIR', '/tmp')
+          out = os.environ.get('FINAL_NAME', 'output.ipk')
+
+          with open(f'{tmp}/debian-binary', 'rb') as f:
+              db = f.read()
+          with open(f'{tmp}/control.tar.gz', 'rb') as f:
+              ctrl = f.read()
+          with open(f'{tmp}/data.tar.gz', 'rb') as f:
+              data = f.read()
+
+          with open(out, 'wb') as f:
+              f.write(b'!<arch>\n')  # ar 魔数
+              f.write(ar_member('debian-binary', db))
+              f.write(ar_member('control.tar.gz', ctrl))
+              f.write(ar_member('data.tar.gz', data))
+
+          print(f'IPK created: {out} ({os.path.getsize(out)} bytes)')
+          PYEOF
+
+          # 清理
+          rm -rf "$TMP_DIR"
 
           echo "=== Generated IPK ==="
           ls -lh "$FINAL_NAME"
