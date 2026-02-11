@@ -213,6 +213,7 @@ jobs:
           # 定义最终文件名
           IPK_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
           echo "IPK_NAME=$IPK_NAME" >> $GITHUB_ENV
+          export IPK_NAME
 
           # --- 内联 opkg-build 逻辑开始 ---
           echo "Building IPK from $PKG_DIR..."
