@@ -142,10 +142,10 @@ jobs:
           PKG_DIR="daed-ipk"
           INSTALLED_SIZE=$(stat -c %s daed)
 
-          # 创建 CONTROL 目录
-          mkdir -p "$PKG_DIR/CONTROL"
+          # 创建 DEBIAN 目录 (dpkg-deb 标准)
+          mkdir -p "$PKG_DIR/DEBIAN"
 
-          cat > "$PKG_DIR/CONTROL/control" << EOF
+          cat > "$PKG_DIR/DEBIAN/control" << EOF
           Package: daed
           Version: ${{ github.event.inputs.version }}
           Architecture: ${{ matrix.openwrt_arch }}
@@ -161,13 +161,13 @@ jobs:
           EOF
 
           # HACK: 去除 heredoc 产生的前导空格
-          sed -i 's/^          //' "$PKG_DIR/CONTROL/control"
+          sed -i 's/^          //' "$PKG_DIR/DEBIAN/control"
 
           # 复制安装脚本
-          cp install/openwrt/postinst "$PKG_DIR/CONTROL/postinst"
-          cp install/openwrt/prerm "$PKG_DIR/CONTROL/prerm"
-          chmod 755 "$PKG_DIR/CONTROL/postinst"
-          chmod 755 "$PKG_DIR/CONTROL/prerm"
+          cp install/openwrt/postinst "$PKG_DIR/DEBIAN/postinst"
+          cp install/openwrt/prerm "$PKG_DIR/DEBIAN/prerm"
+          chmod 755 "$PKG_DIR/DEBIAN/postinst"
+          chmod 755 "$PKG_DIR/DEBIAN/prerm"
 
           # 创建数据目录结构
           mkdir -p "$PKG_DIR/usr/bin"
@@ -188,97 +188,46 @@ jobs:
           cp geosite.dat "$PKG_DIR/usr/share/daed/geosite.dat"
 
           # 配置文件声明（防止升级时覆盖用户配置）
-          cat > "$PKG_DIR/CONTROL/conffiles" << EOF
+          # 配置文件声明（防止升级时覆盖用户配置）
+          cat > "$PKG_DIR/DEBIAN/conffiles" << EOF
           /etc/config/daed
           EOF
-          sed -i 's/^          //' "$PKG_DIR/CONTROL/conffiles"
+          sed -i 's/^          //' "$PKG_DIR/DEBIAN/conffiles"
 
           echo "=== IPK package structure ==="
           find "$PKG_DIR" -type f | sort
-          echo "=== CONTROL/control ==="
-          cat "$PKG_DIR/CONTROL/control"
+          echo "=== DEBIAN/control ==="
+          cat "$PKG_DIR/DEBIAN/control"
 
-      # NOTE: 零外部依赖构建 IPK (兼容性极致版)
-      # 1. 强制 tar --format=ustar (最通用的 POSIX 标准，兼容 BusyBox)
-      # 2. Python 脚本精确构建 ar 归档，文件名添加 '/' 后缀 (System V ar 标准)
+      # NOTE: 使用标准 dpkg-deb 工具构建 (IPK 本质就是 DEB)
+      # 这是最稳妥的标准构建方式，自动处理 ar/tar 格式和权限
       - name: Build IPK package
         if: steps.check.outputs.skip != 'true'
         run: |
           set -e
-          export FINAL_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
           PKG_DIR="daed-ipk"
-          export TMP_DIR=$(mktemp -d)
 
-          # 1. debian-binary
-          printf '2.0\n' > "$TMP_DIR/debian-binary"
+          # 定义最终文件名
+          IPK_NAME="daed_${{ github.event.inputs.version }}_${{ matrix.openwrt_arch }}.ipk"
 
-          # 2. control.tar.gz
-          # 使用 ustar 格式，它是最通用的 POSIX 标准，对 BusyBox 兼容性最好
-          # --numeric-owner 避免用户 ID 映射问题
-          tar --format=ustar --sort=name --mtime='@1704067200' \
-              --owner=0 --group=0 --numeric-owner \
-              -C "$PKG_DIR/CONTROL" -czf "$TMP_DIR/control.tar.gz" .
-
-          # 3. data.tar.gz
-          tar --format=ustar --sort=name --mtime='@1704067200' \
-              --owner=0 --group=0 --numeric-owner \
-              -C "$PKG_DIR" --exclude='./CONTROL' -czf "$TMP_DIR/data.tar.gz" .
-
-          # 4. 用 Python 精确构建 ar 归档 (标准 System V ar 格式)
-          python3 << 'PYEOF'
-          import struct, os, time
-
-          def ar_member(name, data):
-              # 关键修复：System V ar 格式要求文件名以 '/' 结尾
-              # 之前版本缺少这个斜杠导致 Malformed package
-              name_field = (name + '/').encode().ljust(16)
-              
-              # 固定时间戳
-              mtime = b'1704067200  ' 
-              uid = b'0     '
-              gid = b'0     '
-              mode = b'100644  '
-              size = str(len(data)).encode().ljust(10)
-              fmag = b'`\n'
-              
-              header = name_field + mtime + uid + gid + mode + size + fmag
-              pad = b'\n' if len(data) % 2 else b''
-              return header + data + pad
-
-          tmp = os.environ.get('TMP_DIR', '/tmp')
-          out = os.environ.get('FINAL_NAME', 'output.ipk')
-
-          with open(f'{tmp}/debian-binary', 'rb') as f:
-              db = f.read()
-          with open(f'{tmp}/control.tar.gz', 'rb') as f:
-              ctrl = f.read()
-          with open(f'{tmp}/data.tar.gz', 'rb') as f:
-              data = f.read()
-
-          with open(out, 'wb') as f:
-              f.write(b'!<arch>\n')
-              f.write(ar_member('debian-binary', db))
-              f.write(ar_member('control.tar.gz', ctrl))
-              f.write(ar_member('data.tar.gz', data))
-
-          print(f'IPK created: {out} ({os.path.getsize(out)} bytes)')
-          PYEOF
-
-          # 清理
-          rm -rf "$TMP_DIR"
+          # 使用 dpkg-deb 构建
+          # --root-owner-group: 强制内容为 root:root
+          # -Zgzip: 强制使用 gzip 压缩 (OpenWRT 兼容性必需，默认可能是 zstd/xz)
+          # -b: build
+          dpkg-deb --root-owner-group -Zgzip -b "$PKG_DIR" "$IPK_NAME"
 
           echo "=== Generated IPK ==="
-          ls -lh "$FINAL_NAME"
-          echo "IPK_FILE=$FINAL_NAME" >> $GITHUB_ENV
+          ls -lh "$IPK_NAME"
+          echo "IPK_FILE=$IPK_NAME" >> $GITHUB_ENV
 
           # 验证 IPK 结构
           echo "=== IPK ar members ==="
-          ar t "$FINAL_NAME"
+          ar t "$IPK_NAME"
 
-          # 尝试 opkg info 验证 (如果可用)
+          # 尝试 opkg info 验证
           if command -v opkg >/dev/null; then
              echo "=== opkg info verification ==="
-             opkg info -f "$FINAL_NAME" || echo "opkg info failed check"
+             opkg info -f "$IPK_NAME" || echo "opkg info failed check"
           fi
 
       - name: Upload IPK artifact
