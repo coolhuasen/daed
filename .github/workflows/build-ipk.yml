@@ -139,6 +139,9 @@ jobs:
       - name: Prepare IPK structure
         if: steps.check.outputs.skip != 'true'
         run: |
+          PKG_DIR="daed-ipk"
+          INSTALLED_SIZE=$(stat -c %s daed)
+
           # 创建 CONTROL 目录
           mkdir -p "$PKG_DIR/CONTROL"
 
